@@ -6678,10 +6678,6 @@ class GatewayRunner:
                 qcmd = quick_commands[command]
                 if qcmd.get("type") == "exec":
                     exec_cmd = qcmd.get("command", "")
-                    _user_args = event.get_command_args().strip()
-                    # Inject args via env var so quoting inside bash -c '...' stays valid.
-                    # {args} in the command becomes $HERMES_ARGS, expanded by bash itself.
-                    exec_cmd = exec_cmd.replace("{args}", "$HERMES_ARGS")
                     if exec_cmd:
                         try:
                             # Sanitize env to prevent credential leakage —
@@ -6689,14 +6685,13 @@ class GatewayRunner:
                             # has all API keys in os.environ.
                             from tools.environments.local import _sanitize_subprocess_env
                             sanitized_env = _sanitize_subprocess_env(os.environ.copy())
-                            sanitized_env["HERMES_ARGS"] = _user_args
                             proc = await asyncio.create_subprocess_shell(
                                 exec_cmd,
                                 stdout=asyncio.subprocess.PIPE,
                                 stderr=asyncio.subprocess.PIPE,
                                 env=sanitized_env,
                             )
-                            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+                            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
                             output = (stdout or stderr).decode().strip()
                             # Redact any remaining sensitive patterns in output
                             if output:
@@ -6814,20 +6809,6 @@ class GatewayRunner:
             if self._should_send_telegram_lobby_reminder(source):
                 return self._telegram_topic_root_lobby_message()
             return None
-
-        # Greeting auto-response: bypass LLM for exact-match greeting patterns
-        if not command:
-            _gr_cfg = (
-                self.config.get("greeting_response")
-                if isinstance(self.config, dict)
-                else getattr(self.config, "greeting_response", None)
-            )
-            if isinstance(_gr_cfg, dict):
-                _msg_lower = (event.text or "").strip().lower()
-                _gr_patterns = _gr_cfg.get("patterns") or []
-                _gr_reply = _gr_cfg.get("reply", "")
-                if _gr_reply and any(_msg_lower == p.lower() for p in _gr_patterns):
-                    return _gr_reply
 
         # ── Claim this session before any await ───────────────────────
         # Between here and _run_agent registering the real AIAgent, there
@@ -16653,7 +16634,7 @@ def _start_cron_ticker(stop_event: threading.Event, adapters=None, loop=None, in
                         log_message="Channel directory refresh scheduling error",
                     )
                     if fut is not None:
-                        fut.result(timeout=60)
+                        fut.result(timeout=30)
             except Exception as e:
                 logger.debug("Channel directory refresh error: %s", e)
 

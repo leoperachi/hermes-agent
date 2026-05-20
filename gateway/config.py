@@ -459,6 +459,9 @@ class GatewayConfig:
 
     # User-defined quick commands (slash commands that bypass the agent loop)
     quick_commands: Dict[str, Any] = field(default_factory=dict)
+
+    # Greeting auto-response: bypass LLM for exact-match greeting patterns
+    greeting_response: Dict[str, Any] = field(default_factory=dict)
     
     # Storage paths
     sessions_dir: Path = field(default_factory=lambda: get_hermes_home() / "sessions")
@@ -571,6 +574,7 @@ class GatewayConfig:
             },
             "reset_triggers": self.reset_triggers,
             "quick_commands": self.quick_commands,
+            "greeting_response": self.greeting_response,
             "sessions_dir": str(self.sessions_dir),
             "always_log_local": self.always_log_local,
             "stt_enabled": self.stt_enabled,
@@ -615,6 +619,10 @@ class GatewayConfig:
         if not isinstance(quick_commands, dict):
             quick_commands = {}
 
+        greeting_response = data.get("greeting_response", {})
+        if not isinstance(greeting_response, dict):
+            greeting_response = {}
+
         stt_enabled = data.get("stt_enabled")
         if stt_enabled is None:
             stt_enabled = data.get("stt", {}).get("enabled") if isinstance(data.get("stt"), dict) else None
@@ -639,6 +647,7 @@ class GatewayConfig:
             reset_by_platform=reset_by_platform,
             reset_triggers=data.get("reset_triggers", ["/new", "/reset"]),
             quick_commands=quick_commands,
+            greeting_response=greeting_response,
             sessions_dir=sessions_dir,
             always_log_local=_coerce_bool(data.get("always_log_local"), True),
             stt_enabled=_coerce_bool(stt_enabled, True),
@@ -712,6 +721,10 @@ def load_gateway_config() -> GatewayConfig:
             sr = yaml_cfg.get("session_reset")
             if sr and isinstance(sr, dict):
                 gw_data["default_reset_policy"] = sr
+
+            gr = yaml_cfg.get("greeting_response")
+            if isinstance(gr, dict):
+                gw_data["greeting_response"] = gr
 
             qc = yaml_cfg.get("quick_commands")
             if qc is not None:
