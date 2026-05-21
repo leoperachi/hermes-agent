@@ -251,16 +251,18 @@ CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, timestamp);
 
 CREATE TABLE IF NOT EXISTS learnings (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    source       TEXT NOT NULL,
-    source_id    TEXT NOT NULL,
-    category     TEXT NOT NULL DEFAULT 'general',
-    content      TEXT NOT NULL,
-    confidence   REAL NOT NULL DEFAULT 0.8,
-    project_path TEXT,
-    created_at   TEXT NOT NULL,
-    used_count   INTEGER NOT NULL DEFAULT 0,
-    last_used    TEXT
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    source          TEXT NOT NULL,
+    source_id       TEXT NOT NULL,
+    category        TEXT NOT NULL DEFAULT 'general',
+    content         TEXT NOT NULL,
+    confidence      REAL NOT NULL DEFAULT 0.8,
+    project_path    TEXT,
+    created_at      TEXT NOT NULL,
+    used_count      INTEGER NOT NULL DEFAULT 0,
+    last_used       TEXT,
+    extractor_model TEXT,
+    turn_count      INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_learnings_source_id ON learnings(source_id);
@@ -3337,6 +3339,8 @@ class SessionDB:
         content: str,
         confidence: float = 0.8,
         project_path: str = "",
+        extractor_model: str = "",
+        turn_count: int = 0,
     ) -> int:
         """Insert a learning entry. Returns the new row id."""
         import datetime
@@ -3345,9 +3349,11 @@ class SessionDB:
         def _do(conn):
             cur = conn.execute(
                 """INSERT INTO learnings
-                   (source, source_id, category, content, confidence, project_path, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (source, source_id, category, content, confidence, project_path or "", now),
+                   (source, source_id, category, content, confidence, project_path,
+                    created_at, extractor_model, turn_count)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (source, source_id, category, content, confidence, project_path or "",
+                 now, extractor_model or "", turn_count),
             )
             return cur.lastrowid
 

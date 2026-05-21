@@ -577,7 +577,9 @@ def run_conversation(
     if agent._memory_manager:
         try:
             _query = original_user_message if isinstance(original_user_message, str) else ""
-            _ext_prefetch_cache = agent._memory_manager.prefetch_all(_query) or ""
+            _ext_prefetch_cache = agent._memory_manager.prefetch_all(
+                _query, db=getattr(agent, "_session_db", None)
+            ) or ""
         except Exception:
             pass
 
@@ -4051,6 +4053,21 @@ def run_conversation(
         final_response=final_response,
         interrupted=interrupted,
     )
+
+    # Auto-harvest: scan new Claude Code conversations for learnings every N turns.
+    if not interrupted and getattr(agent, "_harvest_interval", 0) > 0:
+        agent._turns_since_harvest = getattr(agent, "_turns_since_harvest", 0) + 1
+        if agent._turns_since_harvest >= agent._harvest_interval:
+            agent._turns_since_harvest = 0
+            _harvest_db = getattr(agent, "_session_db", None)
+            import threading as _threading
+            def _bg_harvest(db=_harvest_db):
+                try:
+                    from tools.memory_harvester_tool import run_harvest
+                    run_harvest(db=db, max_conversations=20)
+                except Exception as _exc:
+                    logger.debug("Auto-harvest failed: %s", _exc)
+            _threading.Thread(target=_bg_harvest, daemon=True).start()
 
     # Background memory/skill review — runs AFTER the response is delivered
     # so it never competes with the user's task for model attention.

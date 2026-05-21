@@ -96,6 +96,8 @@ def run_harvest(
                         content=learning.content,
                         confidence=learning.confidence,
                         project_path=conv.project_path,
+                        extractor_model=learning.extractor_model,
+                        turn_count=conv.human_turns,
                     )
                     count += 1
                 except Exception as exc:

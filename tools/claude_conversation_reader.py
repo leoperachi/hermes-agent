@@ -33,6 +33,7 @@ class ConversationMessage:
     text: str          # plain text content (tool calls stripped)
     timestamp: str     # ISO8601
     uuid: str
+    reasoning: str = ""  # content of thinking/reasoning blocks
 
 
 @dataclass
@@ -52,6 +53,8 @@ class Conversation:
         """Plain-text transcript, suitable for LLM processing."""
         parts = []
         for msg in self.messages:
+            if msg.reasoning.strip():
+                parts.append(f"[{msg.role.upper()} REASONING]\n{msg.reasoning.strip()}")
             if msg.text.strip():
                 parts.append(f"[{msg.role.upper()}]\n{msg.text.strip()}")
         return "\n\n".join(parts)
@@ -88,6 +91,24 @@ def _extract_text_from_content(content: Any) -> str:
     return "\n".join(parts)
 
 
+def _extract_reasoning_from_content(content: Any) -> str:
+    """Extract reasoning/thinking block text from a message content value.
+
+    Handles Claude API native thinking blocks: {"type": "thinking", "thinking": "..."}
+    """
+    if not isinstance(content, list):
+        return ""
+    parts = []
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "thinking":
+            thinking = block.get("thinking", "")
+            if thinking:
+                parts.append(thinking)
+    return "\n".join(parts)
+
+
 def _file_hash(path: Path) -> str:
     """SHA-256 of file contents, hex-encoded."""
     h = hashlib.sha256()
@@ -119,7 +140,8 @@ def _parse_jsonl(path: Path) -> List[ConversationMessage]:
                 role = msg_obj.get("role", entry_type)
                 content = msg_obj.get("content", "")
                 text = _extract_text_from_content(content)
-                if not text.strip():
+                reasoning = _extract_reasoning_from_content(content)
+                if not text.strip() and not reasoning.strip():
                     continue
 
                 messages.append(ConversationMessage(
@@ -127,6 +149,7 @@ def _parse_jsonl(path: Path) -> List[ConversationMessage]:
                     text=text,
                     timestamp=entry.get("timestamp", ""),
                     uuid=entry.get("uuid", ""),
+                    reasoning=reasoning,
                 ))
     except OSError as exc:
         logger.warning("Could not read %s: %s", path, exc)

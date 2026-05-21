@@ -19,6 +19,8 @@ if Hermes config is unavailable (e.g. standalone use).
 import json
 import logging
 import os
+import random
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -44,6 +46,10 @@ Categories:
 - project:    project goals, constraints, current focus
 - feedback:   corrections ("don't do X") or confirmed approaches ("yes, exactly")
 - general:    any other useful insight
+
+The transcript may contain [ASSISTANT REASONING] blocks showing the model's chain-of-thought
+before giving a response. These blocks contain valuable context about WHY decisions were made —
+extract learnings from them too, especially architectural reasoning and preference signals.
 
 Output format (ONLY this, nothing else):
 [
@@ -71,6 +77,7 @@ class Learning:
     category: str
     content: str
     confidence: float = 0.8
+    extractor_model: str = ""
 
     def is_valid(self) -> bool:
         return (
@@ -137,25 +144,46 @@ def _resolve_llm_credentials() -> Tuple[str, str, str]:
     return api_key, base_url, model
 
 
-def _call_llm(prompt: str, api_key: str, base_url: str, model: str) -> str:
-    """Call the LLM and return the raw response text."""
-    from openai import OpenAI
+def _call_llm(prompt: str, api_key: str, base_url: str, model: str,
+              max_retries: int = 3) -> str:
+    """Call the LLM and return the raw response text.
+
+    Retries up to max_retries times on transient errors (rate limits,
+    connection errors, timeouts) with exponential backoff + jitter.
+    Non-transient errors (auth, bad model name) are raised immediately.
+    """
+    from openai import OpenAI, APIConnectionError, RateLimitError, APITimeoutError
     client = OpenAI(
         api_key=api_key,
         base_url=base_url or None,
         timeout=60,
         max_retries=1,
     )
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": _EXTRACTION_SYSTEM},
-            {"role": "user", "content": prompt},
-        ],
-        temperature=0.2,
-        max_tokens=2000,
-    )
-    return response.choices[0].message.content or ""
+    last_exc: Exception = RuntimeError("no attempts made")
+    for attempt in range(max_retries):
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": _EXTRACTION_SYSTEM},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.2,
+                max_tokens=2000,
+            )
+            return response.choices[0].message.content or ""
+        except (APIConnectionError, RateLimitError, APITimeoutError) as exc:
+            last_exc = exc
+            wait = (2 ** attempt) + random.uniform(0, 1)
+            logger.warning(
+                "Learning extractor: transient LLM error (attempt %d/%d): %s — retrying in %.1fs",
+                attempt + 1, max_retries, exc, wait,
+            )
+            time.sleep(wait)
+        except Exception:
+            # Non-transient (auth failure, invalid model, etc.) — raise immediately
+            raise
+    raise last_exc
 
 
 def _parse_learnings(raw: str) -> List[Learning]:
@@ -261,9 +289,11 @@ def extract_learnings(
         return []
 
     learnings = _parse_learnings(raw)
+    for learning in learnings:
+        learning.extractor_model = model
     filtered = [l for l in learnings if l.confidence >= min_confidence]
     logger.info(
-        "Extracted %d learnings (from %d) for project=%s",
-        len(filtered), len(learnings), project_path or "(unknown)",
+        "Extracted %d learnings (from %d) for project=%s model=%s",
+        len(filtered), len(learnings), project_path or "(unknown)", model,
     )
     return filtered
