@@ -33,7 +33,7 @@ T = TypeVar("T")
 
 DEFAULT_DB_PATH = get_hermes_home() / "state.db"
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 # ---------------------------------------------------------------------------
 # WAL-compatibility fallback
@@ -249,6 +249,31 @@ CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions(source);
 CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, timestamp);
+
+CREATE TABLE IF NOT EXISTS learnings (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    source       TEXT NOT NULL,
+    source_id    TEXT NOT NULL,
+    category     TEXT NOT NULL DEFAULT 'general',
+    content      TEXT NOT NULL,
+    confidence   REAL NOT NULL DEFAULT 0.8,
+    project_path TEXT,
+    created_at   TEXT NOT NULL,
+    used_count   INTEGER NOT NULL DEFAULT 0,
+    last_used    TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_learnings_source_id ON learnings(source_id);
+CREATE INDEX IF NOT EXISTS idx_learnings_category ON learnings(category);
+CREATE INDEX IF NOT EXISTS idx_learnings_created ON learnings(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS learnings_sources (
+    source_id    TEXT PRIMARY KEY,
+    source_type  TEXT NOT NULL,
+    file_path    TEXT,
+    processed_at TEXT NOT NULL,
+    learning_count INTEGER NOT NULL DEFAULT 0
+);
 """
 
 FTS_SQL = """
@@ -303,6 +328,29 @@ CREATE TRIGGER IF NOT EXISTS messages_fts_trigram_update AFTER UPDATE ON message
         new.id,
         COALESCE(new.content, '') || ' ' || COALESCE(new.tool_name, '') || ' ' || COALESCE(new.tool_calls, '')
     );
+END;
+"""
+
+LEARNINGS_FTS_SQL = """
+CREATE VIRTUAL TABLE IF NOT EXISTS learnings_fts USING fts5(
+    content,
+    category UNINDEXED,
+    tokenize='unicode61'
+);
+
+CREATE TRIGGER IF NOT EXISTS learnings_fts_insert AFTER INSERT ON learnings BEGIN
+    INSERT INTO learnings_fts(rowid, content, category)
+        VALUES (new.id, new.content, new.category);
+END;
+
+CREATE TRIGGER IF NOT EXISTS learnings_fts_delete AFTER DELETE ON learnings BEGIN
+    DELETE FROM learnings_fts WHERE rowid = old.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS learnings_fts_update AFTER UPDATE ON learnings BEGIN
+    DELETE FROM learnings_fts WHERE rowid = old.id;
+    INSERT INTO learnings_fts(rowid, content, category)
+        VALUES (new.id, new.content, new.category);
 END;
 """
 
@@ -688,6 +736,12 @@ class SessionDB:
             cursor.execute("SELECT * FROM messages_fts_trigram LIMIT 0")
         except sqlite3.OperationalError:
             cursor.executescript(FTS_TRIGRAM_SQL)
+
+        # Learnings FTS5
+        try:
+            cursor.execute("SELECT * FROM learnings_fts LIMIT 0")
+        except sqlite3.OperationalError:
+            cursor.executescript(LEARNINGS_FTS_SQL)
 
         self._conn.commit()
 
@@ -3269,5 +3323,121 @@ class SessionDB:
                 "handoff_error = ? WHERE id = ?",
                 (error[:500], session_id),
             )
+        self._execute_write(_do)
+
+    # =========================================================================
+    # Learnings — extracted knowledge from Claude Code conversations
+    # =========================================================================
+
+    def add_learning(
+        self,
+        source: str,
+        source_id: str,
+        category: str,
+        content: str,
+        confidence: float = 0.8,
+        project_path: str = "",
+    ) -> int:
+        """Insert a learning entry. Returns the new row id."""
+        import datetime
+        now = datetime.datetime.utcnow().isoformat()
+
+        def _do(conn):
+            cur = conn.execute(
+                """INSERT INTO learnings
+                   (source, source_id, category, content, confidence, project_path, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (source, source_id, category, content, confidence, project_path or "", now),
+            )
+            return cur.lastrowid
+
+        return self._execute_write(_do)
+
+    def mark_source_processed(
+        self,
+        source_id: str,
+        source_type: str,
+        file_path: str = "",
+        learning_count: int = 0,
+    ) -> None:
+        """Record that a source file has been processed."""
+        import datetime
+        now = datetime.datetime.utcnow().isoformat()
+
+        def _do(conn):
+            conn.execute(
+                """INSERT OR REPLACE INTO learnings_sources
+                   (source_id, source_type, file_path, processed_at, learning_count)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (source_id, source_type, file_path or "", now, learning_count),
+            )
+
+        self._execute_write(_do)
+
+    def get_processed_source_ids(self) -> set:
+        """Return set of all source_id strings already processed."""
+        try:
+            rows = self._conn.execute(
+                "SELECT source_id FROM learnings_sources"
+            ).fetchall()
+            return {r[0] for r in rows}
+        except Exception:
+            return set()
+
+    def search_learnings(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """Full-text search over learnings. Returns list of dicts."""
+        if not query or not query.strip():
+            return self.get_recent_learnings(limit)
+        try:
+            rows = self._conn.execute(
+                """SELECT l.id, l.source, l.source_id, l.category, l.content,
+                          l.confidence, l.project_path, l.created_at, l.used_count
+                   FROM learnings_fts f
+                   JOIN learnings l ON l.id = f.rowid
+                   WHERE learnings_fts MATCH ?
+                   ORDER BY rank
+                   LIMIT ?""",
+                (query, limit),
+            ).fetchall()
+            return [dict(r) for r in rows]
+        except Exception as exc:
+            logger.debug("learnings FTS search failed: %s", exc)
+            return []
+
+    def get_recent_learnings(self, limit: int = 20, category: str = "") -> List[Dict[str, Any]]:
+        """Return most recent learnings, optionally filtered by category."""
+        try:
+            if category:
+                rows = self._conn.execute(
+                    """SELECT id, source, source_id, category, content,
+                              confidence, project_path, created_at, used_count
+                       FROM learnings WHERE category = ?
+                       ORDER BY created_at DESC LIMIT ?""",
+                    (category, limit),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    """SELECT id, source, source_id, category, content,
+                              confidence, project_path, created_at, used_count
+                       FROM learnings
+                       ORDER BY created_at DESC LIMIT ?""",
+                    (limit,),
+                ).fetchall()
+            return [dict(r) for r in rows]
+        except Exception as exc:
+            logger.debug("get_recent_learnings failed: %s", exc)
+            return []
+
+    def bump_learning_used(self, learning_id: int) -> None:
+        """Increment used_count and update last_used timestamp."""
+        import datetime
+        now = datetime.datetime.utcnow().isoformat()
+
+        def _do(conn):
+            conn.execute(
+                "UPDATE learnings SET used_count = used_count + 1, last_used = ? WHERE id = ?",
+                (now, learning_id),
+            )
+
         self._execute_write(_do)
 

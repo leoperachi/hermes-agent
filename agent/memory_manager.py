@@ -336,8 +336,8 @@ class MemoryManager:
 
     # -- Prefetch / recall ---------------------------------------------------
 
-    def prefetch_all(self, query: str, *, session_id: str = "") -> str:
-        """Collect prefetch context from all providers.
+    def prefetch_all(self, query: str, *, session_id: str = "", db=None) -> str:
+        """Collect prefetch context from all providers and learnings DB.
 
         Returns merged context text labeled by provider. Empty providers
         are skipped. Failures in one provider don't block others.
@@ -353,7 +353,66 @@ class MemoryManager:
                     "Memory provider '%s' prefetch failed (non-fatal): %s",
                     provider.name, e,
                 )
+
+        # Inject relevant learnings from the learnings DB
+        try:
+            learnings_ctx = self.get_learnings_context(query, db=db)
+            if learnings_ctx:
+                parts.append(learnings_ctx)
+        except Exception as e:
+            logger.debug("learnings prefetch failed (non-fatal): %s", e)
+
         return "\n\n".join(parts)
+
+    def get_learnings_context(
+        self,
+        query: str,
+        *,
+        db=None,
+        limit: int = 8,
+        min_confidence: float = 0.5,
+    ) -> str:
+        """Retrieve relevant learnings from the DB and format as context text.
+
+        Searches by FTS5 when query is non-empty; falls back to recent learnings.
+        Returns an empty string if no learnings exist or DB is unavailable.
+        """
+        try:
+            if db is None:
+                from hermes_state import SessionDB, DEFAULT_DB_PATH
+                if not DEFAULT_DB_PATH.exists():
+                    return ""
+                db = SessionDB()
+
+            if query and query.strip():
+                results = db.search_learnings(query, limit=limit)
+            else:
+                results = db.get_recent_learnings(limit=limit)
+
+            if not results:
+                return ""
+
+            filtered = [r for r in results if r.get("confidence", 0) >= min_confidence]
+            if not filtered:
+                return ""
+
+            lines = ["LEARNINGS FROM PAST CONVERSATIONS"]
+            for r in filtered:
+                cat = r.get("category", "general")
+                content = r.get("content", "").strip()
+                proj = r.get("project_path", "")
+                proj_tag = f" [{proj}]" if proj else ""
+                lines.append(f"[{cat}]{proj_tag} {content}")
+                # Bump usage counter non-blocking
+                try:
+                    db.bump_learning_used(r["id"])
+                except Exception:
+                    pass
+
+            return "\n".join(lines)
+        except Exception as exc:
+            logger.debug("get_learnings_context failed: %s", exc)
+            return ""
 
     def queue_prefetch_all(self, query: str, *, session_id: str = "") -> None:
         """Queue background prefetch on all providers for the next turn."""

@@ -6,7 +6,10 @@
       "Bash(grep -n \"process_command\\\\|def.*dispatch\\\\|/leoquery\\\\|/aiquery\" \"//wsl.localhost/Ubuntu/home/clawbot/hermes-agent/cli.py\" | head -30)",
       "Bash(wsl -d Ubuntu -- bash -c \"export PATH=/home/clawbot/.nvm/versions/node/v24.15.0/bin:/usr/local/bin:/usr/bin:/bin; cd /home/clawbot/leoperachi-ai-proxy && pm2 restart ecosystem.config.cjs --update-env 2>&1\")",
       "Bash(wsl -d Ubuntu -- bash -c \"curl -sS -X POST -H 'Content-Type:application/json' --max-time 15 -d '{\\\\\"question\\\\\":\\\\\"teste\\\\\"}' http://localhost:3003/query 2>&1\")",
-      "Bash(wsl -d Ubuntu -- bash -c \"curl -s http://172.22.240.1:11434/api/tags 2>/dev/null | python3 -c \\\\\"import sys,json; [print\\(m['name']\\) for m in json.load\\(sys.stdin\\).get\\('models',[]\\)]\\\\\" 2>/dev/null\")"
+      "Bash(wsl -d Ubuntu -- bash -c \"curl -s http://172.22.240.1:11434/api/tags 2>/dev/null | python3 -c \\\\\"import sys,json; [print\\(m['name']\\) for m in json.load\\(sys.stdin\\).get\\('models',[]\\)]\\\\\" 2>/dev/null\")",
+      "Bash(ls ~/.claude/projects/ 2>/dev/null | head -10 && ls ~/.claude/ 2>/dev/null | head -20)",
+      "Read(//c/Users/openclaw/.claude/projects/**)",
+      "Read(//c/Users/openclaw/.claude/**)"
     ]
   }
 }
