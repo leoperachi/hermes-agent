@@ -9,7 +9,12 @@
       "Bash(wsl -d Ubuntu -- bash -c \"curl -s http://172.22.240.1:11434/api/tags 2>/dev/null | python3 -c \\\\\"import sys,json; [print\\(m['name']\\) for m in json.load\\(sys.stdin\\).get\\('models',[]\\)]\\\\\" 2>/dev/null\")",
       "Bash(ls ~/.claude/projects/ 2>/dev/null | head -10 && ls ~/.claude/ 2>/dev/null | head -20)",
       "Read(//c/Users/openclaw/.claude/projects/**)",
-      "Read(//c/Users/openclaw/.claude/**)"
+      "Read(//c/Users/openclaw/.claude/**)",
+      "Bash(ls -la //wsl.localhost/Ubuntu/home/clawbot/hermes-agent/)",
+      "Read(///wsl.localhost/Ubuntu/home/clawbot/**)",
+      "Bash(ls -la /home/clawbot/ 2>&1 || pwd)",
+      "Read(///wsl.localhost/Ubuntu/home/**)",
+      "PowerShell(wsl -d Ubuntu -- bash -lc \"find /home/clawbot -maxdepth 4 -name claude -type f 2>/dev/null | head -5; echo ---; ls /home/clawbot/.claude 2>/dev/null | head -3\")"
     ]
   }
 }

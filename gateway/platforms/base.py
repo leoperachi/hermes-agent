@@ -4576,6 +4576,17 @@ class BasePlatformAdapter(ABC):
             text = f"{caption}\n{text}"
         return await self.send(chat_id=chat_id, content=text, reply_to=reply_to, metadata=metadata)
 
+    _TTS_EMOJI_RE = re.compile(
+        '['
+        '\U0001F000-\U0001FAFF'  # emoticons, symbols, transport, supplemental
+        '\U00002600-\U000027BF'  # misc symbols and dingbats
+        '\U00002B00-\U00002BFF'  # arrows, stars (⭐)
+        '\U0000FE00-\U0000FE0F'  # variation selectors
+        '\U0000200D'             # zero-width joiner
+        '\U000020E3'             # combining enclosing keycap
+        ']+'
+    )
+
     def prepare_tts_text(self, text: str) -> str:
         """Prepare a spoken script for TTS.
 
@@ -4594,7 +4605,9 @@ class BasePlatformAdapter(ABC):
         except Exception:
             # Keep auto-TTS best-effort if the normalizer ever fails.
             text = re.sub(r'<think[\s>].*?</think>', ' ', text, flags=re.DOTALL)
-            return re.sub(r'[*_`#\[\]()]', '', text).strip()
+            text = self._TTS_EMOJI_RE.sub('', text)
+            text = re.sub(r'[*_`#\[\]()]', '', text)
+            return re.sub(r'[ \t]{2,}', ' ', text).strip()
 
     async def play_tts(
         self,
